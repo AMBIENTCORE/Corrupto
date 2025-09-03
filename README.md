@@ -1,8 +1,8 @@
-# Corrupto - Glitchy Image Editor
+# Corrupto
 
 ![main](assets/main.png)
 
-A image editing application with a focus on glitch effects and digital distortion. Built with PySide6 and OpenCV, Corrupto provides a VST-like interface for applying various image effects in real-time.
+An image editing application with a focus on glitch effects and digital distortion. Built with PySide6 and OpenCV, Corrupto provides a VST-like interface for applying various image effects in real-time.
 
 ## Features
 
@@ -30,7 +30,9 @@ A image editing application with a focus on glitch effects and digital distortio
 ## Examples
 
 ![output1](assets/output1.png)
+
 ![output2](assets/output2.png)
+
 ![output3](assets/output3.png)
 
 ## Installation
