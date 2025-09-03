@@ -1,27 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Glitchy Image Editor — Corrupto Edition
 
-This script implements a simple image editing application using PySide6 and OpenCV.
-It features a dark themed GUI inspired by the Phonodex project with pixel art fonts,
-multi-selection of effects, and basic file operations.  The first available filter
-converts images to black & white with adjustable parameters.
-
-Key features:
- - Dark theme with custom colors and optional pixel font loaded from local assets.
- - Open and Save buttons supporting common image formats (PNG, JPEG, BMP, WebP, TIFF).
- - List of available filters with multi‑selection; each selected effect exposes its own settings.
- - Real‑time preview; apply button commits the current selection to the working image; undo and reset support.
-
-To run this application:
-    pip install PySide6 opencv-python numpy
-    python main.py
-
-Note: If a custom pixel font is available in "D:\\Documents\\Projects\\Corrupto\\assets\\I-pixel-u.ttf"
-or in the local "assets" folder relative to this script, it will be loaded and used globally.
-
-"""
 
 import os
 import sys
@@ -94,792 +73,6 @@ PIXEL_FONT_PATHS = [
 ]
 PIXEL_FONT_FAMILY = "I pixel u"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------
-# Noise Injection effect
-# ---------------------------------------------------------------------
-
-class NoiseInjectionFilter(BaseFilter):
-    """
-    Add various types of noise to the image to create glitch artifacts.
-    Supports different noise types: gaussian, salt & pepper, and structured noise.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._ui = None
-        # Parameters: intensity, noise type, seed
-        self.intensity = 0      # [0, 100] noise strength
-        self.noise_type = 0     # [0, 2] 0=gaussian, 1=salt&pepper, 2=structured
-        self.seed = 0           # [0, 100] random seed for consistent results
-
-    @property
-    def name(self) -> str:
-        return "NOISE INJECT"
-
-    def reset_params(self) -> None:
-        self.intensity = 0
-        self.noise_type = 0
-        self.seed = 0
-        self._ui = None
-
-    def build_ui(self, parent: QWidget) -> QWidget:
-        if self._ui is not None:
-            return self._ui
-        from PySide6.QtWidgets import QFrame
-        panel = QFrame(parent)
-        panel.setObjectName("effectPanel")
-        accent = "#FF5722"  # deep orange accent
-        panel.setStyleSheet(
-            f"background-color: {COLORS['SECONDARY_BACKGROUND']}; border: 1px solid {accent}; border-radius: 8px; padding: 6px;"
-        )
-        layout = QGridLayout(panel)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
-        params = [
-            ("Intensity", "intensity", 0, 100, 0),
-            ("Type", "noise_type", 0, 2, 0),
-            ("Seed", "seed", 0, 100, 0),
-        ]
-        
-        # Calculate and set fixed height based on content
-        rows_needed = (len(params) + 2) // 3  # 3 knobs per row, round up
-        panel_height = rows_needed * 60 + 20  # 20px for margins
-        panel.setFixedHeight(panel_height)
-        
-        for idx, (disp, attr, min_a, max_a, neutral) in enumerate(params):
-            current = getattr(self, attr)
-            knob = KnobControl(
-                self,
-                attr,
-                disp,
-                min_a,
-                max_a,
-                current,
-                panel,
-                default_actual=neutral,
-            )
-            knob.dial.setStyleSheet(
-                f"QDial {{ background-color: #333333; border: 2px solid {accent}; border-radius: 20px; }}"
-            )
-            knob.name_label.setStyleSheet(f"color: {accent};")
-            row = idx // 3
-            col = idx % 3
-            layout.addWidget(knob, row, col, alignment=Qt.AlignCenter)
-        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._ui = panel
-        return panel
-
-    def apply(self, src_bgr: np.ndarray) -> np.ndarray:
-        if src_bgr is None:
-            return src_bgr
-        if self.intensity <= 0:
-            return src_bgr
-            
-        # Set random seed for consistent results
-        if self.seed > 0:
-            np.random.seed(self.seed)
-            
-        intensity = self.intensity / 100.0
-        h, w, c = src_bgr.shape
-        
-        if self.noise_type == 0:  # Gaussian noise
-            # Add gaussian noise to all channels
-            noise = np.random.normal(0, intensity * 50, (h, w, c)).astype(np.float32)
-            result = src_bgr.astype(np.float32) + noise
-            return clamp_img(result)
-            
-        elif self.noise_type == 1:  # Salt & Pepper noise
-            # Create salt & pepper noise mask
-            noise_mask = np.random.random((h, w, c)) < (intensity * 0.3)
-            salt_mask = np.random.random((h, w, c)) < 0.5
-            pepper_mask = ~salt_mask
-            
-            result = src_bgr.copy().astype(np.float32)
-            # Add salt (white pixels)
-            result[salt_mask & noise_mask] = 255
-            # Add pepper (black pixels)
-            result[pepper_mask & noise_mask] = 0
-            return clamp_img(result)
-            
-        else:  # Structured noise (self.noise_type == 2)
-            # Create structured noise pattern
-            x_coords = np.arange(w)
-            y_coords = np.arange(h)
-            X, Y = np.meshgrid(x_coords, y_coords)
-            
-            # Create sine wave interference pattern
-            freq_x = 0.1 + intensity * 0.2
-            freq_y = 0.05 + intensity * 0.15
-            noise = np.sin(X * freq_x) * np.cos(Y * freq_y) * intensity * 100
-            
-            # Apply to all channels
-            noise_3d = np.stack([noise] * c, axis=2)
-            result = src_bgr.astype(np.float32) + noise_3d
-            return clamp_img(result)
-
-
-# ---------------------------------------------------------------------
-# Slice Shifting effect
-# ---------------------------------------------------------------------
-
-class SliceShiftFilter(BaseFilter):
-    """
-    Cut the image into horizontal strips and randomly shift them left/right
-    to create VHS tracking error effects.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._ui = None
-        # Parameters: strip height, shift amount, frequency
-        self.strip_height = 0   # [0, 50] height of each strip in pixels
-        self.shift_amount = 0   # [0, 100] maximum shift amount
-        self.frequency = 0      # [0, 100] how often strips are shifted
-
-    @property
-    def name(self) -> str:
-        return "SLICE SHIFT"
-
-    def reset_params(self) -> None:
-        self.strip_height = 0
-        self.shift_amount = 0
-        self.frequency = 0
-        self._ui = None
-
-    def build_ui(self, parent: QWidget) -> QWidget:
-        if self._ui is not None:
-            return self._ui
-        from PySide6.QtWidgets import QFrame
-        panel = QFrame(parent)
-        panel.setObjectName("effectPanel")
-        accent = "#E91E63"  # pink accent
-        panel.setStyleSheet(
-            f"background-color: {COLORS['SECONDARY_BACKGROUND']}; border: 1px solid {accent}; border-radius: 8px; padding: 6px;"
-        )
-        layout = QGridLayout(panel)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
-        params = [
-            ("Freq", "frequency", 0, 100, 0),
-            ("Height", "strip_height", 0, 50, 0),
-            ("Shift", "shift_amount", 0, 100, 0),
-        ]
-        
-        # Calculate and set fixed height based on content
-        rows_needed = (len(params) + 2) // 3  # 3 knobs per row, round up
-        panel_height = rows_needed * 60 + 20  # 20px for margins
-        panel.setFixedHeight(panel_height)
-        
-        for idx, (disp, attr, min_a, max_a, neutral) in enumerate(params):
-            current = getattr(self, attr)
-            knob = KnobControl(
-                self,
-                attr,
-                disp,
-                min_a,
-                max_a,
-                current,
-                panel,
-                default_actual=neutral,
-            )
-            knob.dial.setStyleSheet(
-                f"QDial {{ background-color: #333333; border: 2px solid {accent}; border-radius: 20px; }}"
-            )
-            knob.name_label.setStyleSheet(f"color: {accent};")
-            row = idx // 3
-            col = idx % 3
-            layout.addWidget(knob, row, col, alignment=Qt.AlignCenter)
-        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._ui = panel
-        return panel
-
-    def apply(self, src_bgr: np.ndarray) -> np.ndarray:
-        if src_bgr is None:
-            return src_bgr
-        if self.strip_height <= 0 or self.shift_amount <= 0:
-            return src_bgr
-            
-        h, w, c = src_bgr.shape
-        result = src_bgr.copy()
-        
-        # Calculate strip height (minimum 1 pixel)
-        strip_h = max(1, int(self.strip_height))
-        max_shift = int(self.shift_amount * w / 100)  # Convert percentage to pixels
-        frequency = self.frequency / 100.0  # Convert to 0-1 range
-        
-        # Process each strip
-        for y_start in range(0, h, strip_h):
-            y_end = min(y_start + strip_h, h)
-            
-            # Randomly decide if this strip should be shifted
-            if np.random.random() < frequency:
-                # Random shift amount (positive or negative)
-                shift = np.random.randint(-max_shift, max_shift + 1)
-                if shift != 0:
-                    # Shift the strip horizontally
-                    strip = result[y_start:y_end, :, :]
-                    shifted_strip = np.roll(strip, shift, axis=1)
-                    result[y_start:y_end, :, :] = shifted_strip
-        
-        return result
-
-
-# ---------------------------------------------------------------------
-# CRT Scan effect
-# ---------------------------------------------------------------------
-
-class CRTScanFilter(BaseFilter):
-    """
-    Simulates old CRT monitor scan lines and curvature.
-    Creates curved edges and horizontal scan lines for retro aesthetic.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._ui = None
-        # Parameters: intensity, curvature, scan thickness
-        self.intensity = 0      # [0, 100] overall effect strength
-        self.curvature = 0      # [0, 100] screen curvature amount
-        self.scan_thickness = 0 # [0, 20] thickness of scan lines
-
-    @property
-    def name(self) -> str:
-        return "CRT SCAN"
-
-    def reset_params(self) -> None:
-        self.intensity = 0
-        self.curvature = 0
-        self.scan_thickness = 0
-        self._ui = None
-
-    def build_ui(self, parent: QWidget) -> QWidget:
-        if self._ui is not None:
-            return self._ui
-        from PySide6.QtWidgets import QFrame
-        panel = QFrame(parent)
-        panel.setObjectName("effectPanel")
-        accent = "#4CAF50"  # green accent
-        panel.setStyleSheet(
-            f"background-color: {COLORS['SECONDARY_BACKGROUND']}; border: 1px solid {accent}; border-radius: 8px; padding: 6px;"
-        )
-        layout = QGridLayout(panel)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
-        params = [
-            ("Intensity", "intensity", 0, 100, 0),
-            ("Curvature", "curvature", 0, 100, 0),
-            ("Scan", "scan_thickness", 0, 20, 0),
-        ]
-        
-        # Calculate and set fixed height based on content
-        rows_needed = (len(params) + 2) // 3  # 3 knobs per row, round up
-        panel_height = rows_needed * 60 + 20  # 20px for margins
-        panel.setFixedHeight(panel_height)
-        
-        for idx, (disp, attr, min_a, max_a, neutral) in enumerate(params):
-            current = getattr(self, attr)
-            knob = KnobControl(
-                self,
-                attr,
-                disp,
-                min_a,
-                max_a,
-                current,
-                panel,
-                default_actual=neutral,
-            )
-            knob.dial.setStyleSheet(
-                f"QDial {{ background-color: #333333; border: 2px solid {accent}; border-radius: 20px; }}"
-            )
-            knob.name_label.setStyleSheet(f"color: {accent};")
-            row = idx // 3
-            col = idx % 3
-            layout.addWidget(knob, row, col, alignment=Qt.AlignCenter)
-        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._ui = panel
-        return panel
-
-    def apply(self, src_bgr: np.ndarray) -> np.ndarray:
-        if src_bgr is None:
-            return src_bgr
-        if self.intensity <= 0 and self.curvature <= 0 and self.scan_thickness <= 0:
-            return src_bgr
-            
-        h, w, c = src_bgr.shape
-        result = src_bgr.copy().astype(np.float32)
-        
-        intensity = self.intensity / 100.0
-        curvature = self.curvature / 100.0
-        scan_thickness = max(1, int(self.scan_thickness))
-        
-        # Apply scan lines (vectorized)
-        if scan_thickness > 0:
-            # Create scan line mask
-            scan_mask = np.ones((h, w, 1), dtype=np.float32)
-            for y in range(0, h, scan_thickness * 2):
-                y_end = min(y + scan_thickness, h)
-                # Make scan lines more visible - darker lines
-                scan_mask[y:y_end, :, :] = 0.3 + (0.7 * (1.0 - intensity))
-            # Apply mask to all channels
-            result *= scan_mask
-        
-        # Apply curvature distortion (vectorized)
-        if curvature > 0:
-            # Create coordinate grids
-            y_coords, x_coords = np.mgrid[0:h, 0:w]
-            center_x, center_y = w // 2, h // 2
-            
-            # Calculate distances from center
-            dx = x_coords - center_x
-            dy = y_coords - center_y
-            dist = np.sqrt(dx**2 + dy**2)
-            
-            # Avoid division by zero
-            dist = np.maximum(dist, 1)
-            
-            # Calculate distortion
-            max_dist = math.sqrt(center_x**2 + center_y**2)
-            distortion = (dist / max_dist) ** 2 * curvature * 0.5
-            
-            # Calculate new coordinates
-            new_x = np.clip(x_coords + dx * distortion, 0, w - 1).astype(int)
-            new_y = np.clip(y_coords + dy * distortion, 0, h - 1).astype(int)
-            
-            # Apply distortion using advanced indexing
-            distorted = src_bgr[new_y, new_x, :].astype(np.float32)
-            
-            # Blend with current result based on intensity
-            if intensity > 0:
-                result = cv2.addWeighted(result, 1.0 - intensity, distorted, intensity, 0.0)
-            else:
-                result = distorted
-        
-        # Apply overall intensity scaling if no other effects are active
-        if intensity > 0 and curvature <= 0 and scan_thickness <= 0:
-            # Just apply a subtle overall effect
-            result = cv2.addWeighted(result, 1.0 - intensity * 0.3, src_bgr.astype(np.float32), intensity * 0.3, 0.0)
-        
-        return clamp_img(result)
-
-
-# ---------------------------------------------------------------------
-# Pixel Smash effect
-# ---------------------------------------------------------------------
-
-class PixelSmashFilter(BaseFilter):
-    """
-    Randomly "smashes" pixels by moving them to nearby positions.
-    Creates digital distortion and glitch artifacts.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._ui = None
-        # Parameters: smash radius, frequency, intensity
-        self.smash_radius = 0   # [0, 20] maximum pixel displacement
-        self.frequency = 0      # [0, 100] how many pixels get smashed
-        self.intensity = 0      # [0, 100] strength of the effect
-
-    @property
-    def name(self) -> str:
-        return "PIXEL SMASH"
-
-    def reset_params(self) -> None:
-        self.smash_radius = 0
-        self.frequency = 0
-        self.intensity = 0
-        self._ui = None
-
-    def build_ui(self, parent: QWidget) -> QWidget:
-        if self._ui is not None:
-            return self._ui
-        from PySide6.QtWidgets import QFrame
-        panel = QFrame(parent)
-        panel.setObjectName("effectPanel")
-        accent = "#FF9800"  # orange accent
-        panel.setStyleSheet(
-            f"background-color: {COLORS['SECONDARY_BACKGROUND']}; border: 1px solid {accent}; border-radius: 8px; padding: 6px;"
-        )
-        layout = QGridLayout(panel)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
-        params = [
-            ("Radius", "smash_radius", 0, 20, 0),
-            ("Freq", "frequency", 0, 100, 0),
-            ("Intensity", "intensity", 0, 100, 0),
-        ]
-        
-        # Calculate and set fixed height based on content
-        rows_needed = (len(params) + 2) // 3  # 3 knobs per row, round up
-        panel_height = rows_needed * 60 + 20  # 20px for margins
-        panel.setFixedHeight(panel_height)
-        
-        for idx, (disp, attr, min_a, max_a, neutral) in enumerate(params):
-            current = getattr(self, attr)
-            knob = KnobControl(
-                self,
-                attr,
-                disp,
-                min_a,
-                max_a,
-                current,
-                panel,
-                default_actual=neutral,
-            )
-            knob.dial.setStyleSheet(
-                f"QDial {{ background-color: #333333; border: 2px solid {accent}; border-radius: 20px; }}"
-            )
-            knob.name_label.setStyleSheet(f"color: {accent};")
-            row = idx // 3
-            col = idx % 3
-            layout.addWidget(knob, row, col, alignment=Qt.AlignCenter)
-        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._ui = panel
-        return panel
-
-    def apply(self, src_bgr: np.ndarray) -> np.ndarray:
-        if src_bgr is None:
-            return src_bgr
-        if self.smash_radius <= 0 or self.frequency <= 0:
-            return src_bgr
-            
-        h, w, c = src_bgr.shape
-        result = src_bgr.copy()
-        
-        radius = int(self.smash_radius)
-        frequency = self.frequency / 100.0
-        intensity = self.intensity / 100.0
-        
-        # Create random displacement map (vectorized)
-        # Generate random mask for pixels to smash
-        smash_mask = np.random.random((h, w)) < frequency
-        
-        if np.any(smash_mask):
-            # Generate random displacements for all pixels at once
-            dx = np.random.randint(-radius, radius + 1, (h, w))
-            dy = np.random.randint(-radius, radius + 1, (h, w))
-            
-            # Calculate source positions
-            y_coords, x_coords = np.mgrid[0:h, 0:w]
-            src_x = np.clip(x_coords - dx, 0, w - 1)
-            src_y = np.clip(y_coords - dy, 0, h - 1)
-            
-            # Only apply to pixels that are marked for smashing
-            smash_indices = np.where(smash_mask)
-            
-            # Get source pixels for smashed positions
-            src_pixels = src_bgr[src_y[smash_indices], src_x[smash_indices], :]
-            orig_pixels = result[smash_indices]
-            
-            # Blend original and smashed pixels
-            blended = (orig_pixels.astype(np.float32) * (1.0 - intensity) + 
-                      src_pixels.astype(np.float32) * intensity)
-            
-            # Update result
-            result[smash_indices] = blended.astype(np.uint8)
-        
-        return result
-
-
-# ---------------------------------------------------------------------
-# Glitch Blocks effect
-# ---------------------------------------------------------------------
-
-class GlitchBlocksFilter(BaseFilter):
-    """
-    Replaces random rectangular areas with glitched versions.
-    Creates "corrupted data block" effects.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._ui = None
-        # Parameters: block size, frequency, glitch intensity
-        self.block_size = 0     # [0, 100] size of glitch blocks
-        self.frequency = 0      # [0, 100] how many blocks appear
-        self.glitch_intensity = 0 # [0, 100] strength of glitch effect
-
-    @property
-    def name(self) -> str:
-        return "GLITCH BLOCKS"
-
-    def reset_params(self) -> None:
-        self.block_size = 0
-        self.frequency = 0
-        self.glitch_intensity = 0
-        self._ui = None
-
-    def build_ui(self, parent: QWidget) -> QWidget:
-        if self._ui is not None:
-            return self._ui
-        from PySide6.QtWidgets import QFrame
-        panel = QFrame(parent)
-        panel.setObjectName("effectPanel")
-        accent = "#9C27B0"  # purple accent
-        panel.setStyleSheet(
-            f"background-color: {COLORS['SECONDARY_BACKGROUND']}; border: 1px solid {accent}; border-radius: 8px; padding: 6px;"
-        )
-        layout = QGridLayout(panel)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
-        params = [
-            ("Size", "block_size", 0, 100, 0),
-            ("Freq", "frequency", 0, 100, 0),
-            ("Glitch", "glitch_intensity", 0, 100, 0),
-        ]
-        
-        # Calculate and set fixed height based on content
-        rows_needed = (len(params) + 2) // 3  # 3 knobs per row, round up
-        panel_height = rows_needed * 60 + 20  # 20px for margins
-        panel.setFixedHeight(panel_height)
-        
-        for idx, (disp, attr, min_a, max_a, neutral) in enumerate(params):
-            current = getattr(self, attr)
-            knob = KnobControl(
-                self,
-                attr,
-                disp,
-                min_a,
-                max_a,
-                current,
-                panel,
-                default_actual=neutral,
-            )
-            knob.dial.setStyleSheet(
-                f"QDial {{ background-color: #333333; border: 2px solid {accent}; border-radius: 20px; }}"
-            )
-            knob.name_label.setStyleSheet(f"color: {accent};")
-            row = idx // 3
-            col = idx % 3
-            layout.addWidget(knob, row, col, alignment=Qt.AlignCenter)
-        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._ui = panel
-        return panel
-
-    def apply(self, src_bgr: np.ndarray) -> np.ndarray:
-        if src_bgr is None:
-            return src_bgr
-        if self.block_size <= 0 or self.frequency <= 0:
-            return src_bgr
-            
-        h, w, c = src_bgr.shape
-        result = src_bgr.copy()
-        
-        # Calculate block dimensions
-        max_block_size = min(h, w) // 4  # Maximum 1/4 of image dimensions
-        block_dim = max(10, int(self.block_size * max_block_size / 100))
-        frequency = self.frequency / 100.0
-        glitch_strength = self.glitch_intensity / 100.0
-        
-        # Calculate number of blocks to create
-        num_blocks = int(frequency * 20)  # Up to 20 blocks at max frequency
-        
-        for _ in range(num_blocks):
-            # Random block position
-            x = np.random.randint(0, w - block_dim)
-            y = np.random.randint(0, h - block_dim)
-            
-            # Random glitch effect
-            effect_type = np.random.randint(0, 4)
-            
-            if effect_type == 0:  # Color shift
-                # Shift color channels randomly
-                shift_x = np.random.randint(-block_dim//4, block_dim//4)
-                shift_y = np.random.randint(-block_dim//4, block_dim//4)
-                
-                for cy in range(block_dim):
-                    for cx in range(block_dim):
-                        src_y = min(h-1, max(0, y + cy + shift_y))
-                        src_x = min(w-1, max(0, x + cx + shift_x))
-                        result[y+cy, x+cx, :] = src_bgr[src_y, src_x, :]
-                        
-            elif effect_type == 1:  # Invert colors
-                result[y:y+block_dim, x:x+block_dim, :] = 255 - result[y:y+block_dim, x:x+block_dim, :]
-                
-            elif effect_type == 2:  # Noise injection
-                noise = np.random.randint(0, 256, (block_dim, block_dim, c))
-                result[y:y+block_dim, x:x+block_dim, :] = noise
-                
-            elif effect_type == 3:  # Pixel scramble
-                # Randomly rearrange pixels within the block
-                block_pixels = result[y:y+block_dim, x:x+block_dim, :].reshape(-1, c)
-                np.random.shuffle(block_pixels)
-                result[y:y+block_dim, x:x+block_dim, :] = block_pixels.reshape(block_dim, block_dim, c)
-            
-            # Blend with original based on glitch intensity
-            if glitch_strength < 1.0:
-                original_block = src_bgr[y:y+block_dim, x:x+block_dim, :]
-                glitched_block = result[y:y+block_dim, x:x+block_dim, :]
-                blended = cv2.addWeighted(original_block, 1.0 - glitch_strength, glitched_block, glitch_strength, 0.0)
-                result[y:y+block_dim, x:x+block_dim, :] = blended
-        
-        return result
-
-
-# ---------------------------------------------------------------------
-# ASCII Art effect
-# ---------------------------------------------------------------------
-
-class ASCIIArtFilter(BaseFilter):
-    """
-    Convert the image to ASCII art characters.
-    Creates a retro terminal/typewriter aesthetic.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._ui = None
-        # Parameters: character size, contrast
-        self.char_size = 8      # [4, 20] size of ASCII characters
-        self.contrast = 0       # [0, 100] contrast adjustment
-
-    @property
-    def name(self) -> str:
-        return "ASCII ART"
-
-    def reset_params(self) -> None:
-        self.char_size = 8
-        self.contrast = 0
-        self._ui = None
-
-    def build_ui(self, parent: QWidget) -> QWidget:
-        if self._ui is not None:
-            return self._ui
-        from PySide6.QtWidgets import QFrame
-        panel = QFrame(parent)
-        panel.setObjectName("effectPanel")
-        accent = "#00BCD4"  # cyan accent
-        panel.setStyleSheet(
-            f"background-color: {COLORS['SECONDARY_BACKGROUND']}; border: 1px solid {accent}; border-radius: 8px; padding: 6px;"
-        )
-        layout = QGridLayout(panel)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
-        params = [
-            ("Size", "char_size", 4, 20, 8),
-            ("Contrast", "contrast", 0, 100, 0),
-        ]
-        
-        # Calculate and set fixed height based on content
-        rows_needed = (len(params) + 2) // 3  # 3 knobs per row, round up
-        panel_height = rows_needed * 60 + 20  # 20px for margins
-        panel.setFixedHeight(panel_height)
-        
-        for idx, (disp, attr, min_a, max_a, neutral) in enumerate(params):
-            current = getattr(self, attr)
-            knob = KnobControl(
-                self,
-                attr,
-                disp,
-                min_a,
-                max_a,
-                current,
-                panel,
-                default_actual=neutral,
-            )
-            knob.dial.setStyleSheet(
-                f"QDial {{ background-color: #333333; border: 2px solid {accent}; border-radius: 20px; }}"
-            )
-            knob.name_label.setStyleSheet(f"color: {accent};")
-            row = idx // 3
-            col = idx % 3
-            layout.addWidget(knob, row, col, alignment=Qt.AlignCenter)
-        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._ui = panel
-        return panel
-
-    def apply(self, src_bgr: np.ndarray) -> np.ndarray:
-        if src_bgr is None:
-            return src_bgr
-            
-        h, w, c = src_bgr.shape
-        
-        # Convert to grayscale
-        gray = cv2.cvtColor(src_bgr, cv2.COLOR_BGR2GRAY)
-        
-        # Apply contrast adjustment
-        if self.contrast > 0:
-            contrast_factor = 1.0 + (self.contrast / 100.0) * 2.0
-            gray = cv2.convertScaleAbs(gray, alpha=contrast_factor, beta=0)
-        
-        # Character size from parameter
-        char_size = max(4, min(20, int(self.char_size)))
-        
-        # Downsample image to character grid
-        grid_h = max(1, h // char_size)
-        grid_w = max(1, w // char_size)
-        
-        # Resize to character grid
-        small_gray = cv2.resize(gray, (grid_w, grid_h), interpolation=cv2.INTER_AREA)
-        
-        # Extended ASCII character set (from dark to light)
-        ascii_chars = " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
-        
-        # Create ASCII art mapping
-        ascii_art = []
-        for row in small_gray:
-            ascii_row = []
-            for pixel in row:
-                # Map brightness to ASCII character
-                char_idx = int((pixel / 255.0) * (len(ascii_chars) - 1))
-                char_idx = max(0, min(len(ascii_chars) - 1, char_idx))
-                ascii_row.append(ascii_chars[char_idx])
-            ascii_art.append(ascii_row)
-        
-        # Create output image with black background
-        result = np.zeros((h, w, 3), dtype=np.uint8)
-        
-        # Draw actual ASCII characters using OpenCV text rendering
-        for y, ascii_row in enumerate(ascii_art):
-            for x, char in enumerate(ascii_row):
-                if char != ' ':
-                    # Calculate position
-                    pos_x = x * char_size
-                    pos_y = y * char_size + char_size  # Adjust for text baseline
-                    
-                    # Calculate color based on character darkness
-                    char_idx = ascii_chars.find(char)
-                    brightness = char_idx / (len(ascii_chars) - 1)
-                    color = int(brightness * 255)
-                    
-                    # Calculate font scale based on character size
-                    font_scale = char_size / 20.0  # Scale font relative to character size
-                    
-                    # Draw the actual character using OpenCV putText
-                    cv2.putText(result, char, (pos_x, pos_y), 
-                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, (color, color, color), 1)
-        
-        return result
-
-
 # ---------------------------------------------------------------------
 # Image view widget
 # ---------------------------------------------------------------------
@@ -921,7 +114,6 @@ class ImageView(QScrollArea):
         )
         self.label.setPixmap(scaled)
         self.label.resize(scaled.size())
-
 
 # ---------------------------------------------------------------------
 # Main application window
@@ -1092,10 +284,12 @@ class MainWindow(QMainWindow):
         Construct the main interface: left panel for file and filter selection,
         right panel for filter settings and image preview.
         """
-        splitter = QSplitter(Qt.Horizontal, self)
-        # Expose splitter on self so we can reapply the sizing ratio later if needed
-        self.splitter = splitter
-        self.setCentralWidget(splitter)
+        # Create a horizontal layout instead of a splitter
+        central_widget = QWidget()
+        central_layout = QHBoxLayout(central_widget)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        self.setCentralWidget(central_widget)
 
         # Left panel: file buttons and filter list
         left = QWidget()
@@ -1103,25 +297,14 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(6, 6, 6, 6)
         left_layout.setSpacing(6)
 
-        self.btn_open = QPushButton("OPEN IMAGE…")
+        self.btn_open = QPushButton("OPEN")
         self.btn_open.clicked.connect(self.open_image_dialog)
         left_layout.addWidget(self.btn_open)
 
-        self.btn_save = QPushButton("SAVE IMAGE…")
+        self.btn_save = QPushButton("SAVE")
         self.btn_save.clicked.connect(self.save_image_dialog)
         self.btn_save.setEnabled(False)
         left_layout.addWidget(self.btn_save)
-
-        # Apply button placed directly under Save
-        self.btn_apply = QPushButton("APPLY")
-        self.btn_apply.clicked.connect(self.apply_current_preview)
-        # Apply button uses the positive accent class
-        self.btn_apply.setProperty("class", "positive")
-        left_layout.addWidget(self.btn_apply)
-        # Accent style for the Apply button
-        self.btn_apply.setStyleSheet(
-            f"QPushButton[class='positive'] {{ background: {COLORS['SUCCESS']}; color: #000000; border: 1px solid #2e7d32; }}"
-        )
 
         self.filter_list = QListWidget()
         # Allow selecting none, one, or multiple filters
@@ -1154,6 +337,27 @@ class MainWindow(QMainWindow):
         self.btn_randomize.setStyleSheet(
             f"QPushButton[class='randomize'] {{ background: {COLORS['ERROR']}; color: #000000; border: 1px solid #d32f2f; }}"
         )
+
+        # Clear button placed under RANDOMIZE
+        self.btn_clear = QPushButton("CLEAR")
+        self.btn_clear.clicked.connect(self.clear_all_effects)
+        self.btn_clear.setProperty("class", "clear")
+        left_layout.addWidget(self.btn_clear)
+        # Style for the clear button (yellow)
+        self.btn_clear.setStyleSheet(
+            f"QPushButton[class='clear'] {{ background: #FFC107; color: #000000; border: 1px solid #F57F17; }}"
+        )
+
+        # Apply button placed under CLEAR
+        self.btn_apply = QPushButton("APPLY")
+        self.btn_apply.clicked.connect(self.apply_current_preview)
+        # Apply button uses the positive accent class
+        self.btn_apply.setProperty("class", "positive")
+        left_layout.addWidget(self.btn_apply)
+        # Accent style for the Apply button
+        self.btn_apply.setStyleSheet(
+            f"QPushButton[class='positive'] {{ background: {COLORS['SUCCESS']}; color: #000000; border: 1px solid #2e7d32; }}"
+        )
         
 
         
@@ -1177,14 +381,9 @@ class MainWindow(QMainWindow):
         self.image_view = ImageView()
         right_layout.addWidget(self.image_view, 1)
 
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        # left panel proportion
-        splitter.setSizes([int(self.width() * 0.15), int(self.width() * 0.85)])
-        # Maintain a 1:9 stretch ratio so that adding or removing effects does not
-        # change the relative width of the panels unless the user adjusts it
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 9)
+        # Add widgets to the central layout with fixed proportions
+        central_layout.addWidget(left, 17)  # Left panel gets 1/10 of the space
+        central_layout.addWidget(right, 83)  # Right panel gets 9/10 of the space
 
         # Register filters
         self.filters: List[BaseFilter] = []
@@ -1291,7 +490,7 @@ class MainWindow(QMainWindow):
 
     def save_image_dialog(self) -> None:
         """
-        Prompt the user to choose a filename and save the current committed image.
+        Prompt the user to choose a filename and save the current preview image.
         Supports PNG, JPEG, BMP, WebP, and TIFF formats.
         """
         if self._image_committed is None:
@@ -1321,12 +520,17 @@ class MainWindow(QMainWindow):
                 ext = ".tif"
             out_path = out_path + ext
 
-        img = self._image_committed
+        # Get the current preview image (what the user is seeing)
+        preview_img = self._get_current_preview_image()
+        if preview_img is None:
+            QMessageBox.warning(self, "Save", "No preview image to save.")
+            return
+            
         params = []
         if ext in [".jpg", ".jpeg"]:
             params = [cv2.IMWRITE_JPEG_QUALITY, 95]
 
-        success, buf = cv2.imencode(ext, img, params)
+        success, buf = cv2.imencode(ext, preview_img, params)
         if not success:
             QMessageBox.warning(self, "Save", "Failed to encode image.")
             return
@@ -1336,7 +540,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Save", f"Failed to save image: {e}")
             return
 
-        QMessageBox.information(self, "Save", f"Saved to:\n{out_path}")
+        QMessageBox.information(self, "Save", f"SAVED TO:\n{out_path.upper()}")
 
     # -----------------------------------------------------------------
     # Editing workflow
@@ -1400,15 +604,13 @@ class MainWindow(QMainWindow):
         # Update preview to reflect the new selection
         self._update_preview()
 
-    def _update_preview(self) -> None:
+    def _get_current_preview_image(self) -> Optional[np.ndarray]:
         """
-        Generate and display a preview image.  If no filters are selected,
-        display the committed image.  Otherwise, apply each selected filter
-        sequentially to the committed image.
+        Generate and return the current preview image without displaying it.
+        Used for saving the current preview state.
         """
         if self._image_committed is None:
-            self.image_view.set_image(None)
-            return
+            return None
 
         # Determine current selected filters (in list order)
         selected_filters: List[BaseFilter] = []
@@ -1418,9 +620,8 @@ class MainWindow(QMainWindow):
                 selected_filters.append(self.filters[row])
 
         if not selected_filters:
-            # No filter selected; show committed image
-            self.image_view.set_image(self._image_committed)
-            return
+            # No filter selected; return committed image
+            return self._image_committed.copy()
 
         # Start with the committed image
         preview = self._image_committed.copy()
@@ -1432,6 +633,15 @@ class MainWindow(QMainWindow):
                 # If a filter fails, skip it
                 pass
 
+        return preview
+
+    def _update_preview(self) -> None:
+        """
+        Generate and display a preview image.  If no filters are selected,
+        display the committed image.  Otherwise, apply each selected filter
+        sequentially to the committed image.
+        """
+        preview = self._get_current_preview_image()
         self.image_view.set_image(preview)
 
     def randomize_effects(self) -> None:
@@ -1583,13 +793,37 @@ class MainWindow(QMainWindow):
         # Update the preview to show the randomized effects
         self._update_preview()
 
+    def clear_all_effects(self) -> None:
+        """
+        Clear all current effects and reset to the original loaded image.
+        This resets both the committed image and clears all filter selections.
+        """
+        if self._image_loaded is None:
+            return
+            
+        # Reset to the original loaded image
+        self._image_committed = self._image_loaded.copy()
+        self._history.clear()
+        
+        # Clear all filter selections
+        self.filter_list.clearSelection()
+        
+        # Reset parameters for all filters
+        for f in self.filters:
+            f.reset_params()
+        
+        # Rebuild the UI (will be empty since no filters are selected)
+        self._on_filter_selection_changed()
+        
+        # Update the preview to show the original image
+        self._update_preview()
+
     def apply_current_preview(self) -> None:
         """
         Commit the current preview image to the working image.  Applies all
-        selected filters in sequence to the original loaded image (not the
-        previously committed image) so that effects do not stack.  After
-        applying, reset parameters on the selected filters to avoid
-        reapplying the effect multiple times.
+        selected filters in sequence to the current committed image, allowing
+        effects to build on top of previously applied effects.  After
+        applying, reset parameters and clear the filter selection.
         """
         if self._image_committed is None:
             return
@@ -1604,12 +838,9 @@ class MainWindow(QMainWindow):
         if not selected_filters:
             return
 
-        # Use the original loaded image as the base, so effects are applied
-        # only to the unmodified source.  If the original image is not
-        # available (should not happen), fall back to the current commit.
-        base_img = self._image_loaded.copy() if self._image_loaded is not None else self._image_committed.copy()
-
-        new_img = base_img
+        # Apply effects to the current committed image (not the original loaded image)
+        # This allows effects to build on top of previously applied effects
+        new_img = self._image_committed.copy()
         for f in selected_filters:
             try:
                 new_img = f.apply(new_img)
@@ -1626,8 +857,10 @@ class MainWindow(QMainWindow):
         for f in selected_filters:
             f.reset_params()
 
-        # Rebuild the UI for the selected filters without altering the selection
-        # This will cause their knobs to reflect the neutral (default) values
+        # Clear the filter selection
+        self.filter_list.clearSelection()
+        
+        # Rebuild the UI (will be empty since no filters are selected)
         self._on_filter_selection_changed()
 
     def undo(self) -> None:

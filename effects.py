@@ -320,7 +320,7 @@ class RGBShiftFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "RGB SHIFT"
+        return "RGB_SHFT"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:
@@ -471,7 +471,7 @@ class BlockifyFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "BLOCKIFY"
+        return "BLOCKS"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:
@@ -555,7 +555,7 @@ class PixelSortFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "PIXEL SORT"
+        return "PIXEL_SRT"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:
@@ -657,7 +657,7 @@ class NoiseInjectionFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "NOISE INJECT"
+        return "NOISE_INJCT"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:
@@ -756,7 +756,7 @@ class SliceShiftFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "SLICE SHIFT"
+        return "SLICE_SHFT"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:
@@ -840,7 +840,7 @@ class CRTScanFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "CRT SCAN"
+        return "CRT"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:
@@ -947,7 +947,7 @@ class PixelSmashFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "PIXEL SMASH"
+        return "PIXEL_SMSH"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:
@@ -1040,7 +1040,7 @@ class GlitchBlocksFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "GLITCH BLOCKS"
+        return "GLITCH_BLOCKS"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:
@@ -1150,7 +1150,7 @@ class ASCIIArtFilter(BaseFilter):
 
     @property
     def name(self) -> str:
-        return "ASCII ART"
+        return "ASCII"
 
     def build_ui(self, parent: QWidget) -> QWidget:
         if self._ui is not None:

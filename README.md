@@ -1,17 +1,16 @@
 # Corrupto - Glitchy Image Editor
 
-A dark-themed image editing application with a focus on glitch effects and digital distortion. Built with PySide6 and OpenCV, Corrupto provides a VST-like interface for applying various image effects in real-time.
+A image editing application with a focus on glitch effects and digital distortion. Built with PySide6 and OpenCV, Corrupto provides a VST-like interface for applying various image effects in real-time.
 
 ## Features
 
-- **Dark Theme**: Professional dark UI inspired by audio software interfaces
 - **Real-time Preview**: See effects applied instantly as you adjust parameters
-- **Multiple Effects**: 12+ different glitch and distortion effects
+- **Multiple Effects**: Multiple different glitch and distortion effects
 - **Multi-selection**: Apply multiple effects simultaneously
 - **Randomize**: Generate random effect combinations with one click
 - **File Support**: Open and save PNG, JPEG, BMP, WebP, and TIFF formats
 
-## Available Effects
+## Available Effects (as of 03Sep2025)
 
 - **B&W**: Black & white conversion with brightness, contrast, gamma, grain, and vignette controls
 - **RGB SHIFT**: Independent RGB channel shifting for chromatic aberration effects
@@ -40,12 +39,12 @@ A dark-themed image editing application with a focus on glitch effects and digit
 
 ## Usage
 
-1. **Open an Image**: Click "OPEN IMAGE…" to load a photo
-2. **Select Effects**: Choose one or more effects from the list (hold Ctrl/Cmd for multiple selection)
+1. **Open an Image**: Click "OPEN" to load a photo
+2. **Select Effects**: Choose one or more effects from the list
 3. **Adjust Parameters**: Use the knobs to fine-tune effect parameters
 4. **Preview**: See real-time preview of your changes
 5. **Apply**: Click "APPLY" to commit the effects to your image
-6. **Save**: Use "SAVE IMAGE…" to export your glitched creation
+6. **Save**: Use "SAVE" to export the image
 7. **Randomize**: Click "RANDOMIZE" for instant random effect combinations
 
 ## Keyboard Shortcuts
@@ -58,7 +57,7 @@ A dark-themed image editing application with a focus on glitch effects and digit
 
 - **Knobs**: Drag to adjust parameters, right-click to reset to default
 - **Text Input**: Click the number display to type exact values
-- **Multi-selection**: Hold Ctrl/Cmd while clicking to select multiple effects
+- **Multi-selection**: Left click effects to select multiple
 
 ## Technical Details
 
@@ -80,17 +79,13 @@ See `requirements.txt` for exact version specifications.
 
 ## License
 
-This project is open source. Feel free to modify and distribute according to your needs.
+This project is open source.
 
 ## Contributing
 
 Contributions are welcome! Feel free to:
-- Add new effects
+**- Add new effects**
 - Improve existing algorithms
 - Enhance the UI
 - Fix bugs
-- Add documentation
 
-## Credits
-
-Inspired by the Phonodex project's dark theme and VST-like interface design.
