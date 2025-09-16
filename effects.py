@@ -9,7 +9,7 @@ This module contains all the image processing filters and effects used by the ma
 import cv2
 import numpy as np
 import math
-from typing import Optional
+from typing import Optional, List
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImage
@@ -1429,4 +1429,433 @@ class MeshFilter(BaseFilter):
         self.intensity = 0
         self.perspective = 0
         self.wireframe = 0
+        self._ui = None
+
+
+class FragmentationFilter(BaseFilter):
+    """
+    Breaks the image into fragments and scatters them randomly.
+    Creates a shattered glass effect with configurable fragment count, scatter radius, rotation, and gaps.
+    """
+    
+    def __init__(self) -> None:
+        super().__init__()
+        self._ui = None
+        self.fragment_count = 0      # [10, 200] number of fragments to create
+        self.scatter_radius = 0      # [0, 100] how far fragments scatter from original position
+        self.rotation = 0            # [0, 360] maximum rotation angle for fragments
+        self.gap_size = 0            # [0, 50] size of gaps between fragments
+        self.intensity = 0           # [0, 100] overall effect strength
+
+    @property
+    def name(self) -> str:
+        return "FRGMNT"
+
+    def build_ui(self, parent: QWidget) -> QWidget:
+        if self._ui is not None:
+            return self._ui
+        
+        panel = QFrame(parent)
+        panel.setObjectName("effectPanel")
+        accent = "#E91E63"  # pink accent
+        panel.setStyleSheet(
+            f"background-color: #252526; border: 1px solid {accent}; border-radius: 8px; padding: 6px;"
+        )
+        layout = QGridLayout(panel)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+        
+        params = [
+            ("Fragments", "fragment_count", 10, 200, 0),
+            ("Scatter", "scatter_radius", 0, 100, 0),
+            ("Rotation", "rotation", 0, 360, 0),
+            ("Gap", "gap_size", 0, 50, 0),
+            ("Intensity", "intensity", 0, 100, 0),
+        ]
+        
+        rows_needed = (len(params) + 2) // 3
+        panel_height = rows_needed * 60 + 20
+        panel.setFixedHeight(panel_height)
+        
+        for idx, (disp, attr, min_a, max_a, neutral) in enumerate(params):
+            current = getattr(self, attr)
+            knob = KnobControl(
+                self, attr, disp, min_a, max_a, current, panel, default_actual=neutral
+            )
+            knob.dial.setStyleSheet(
+                f"QDial {{ background-color: #333333; border: 2px solid {accent}; border-radius: 20px; }}"
+            )
+            knob.name_label.setStyleSheet(f"color: {accent};")
+            row = idx // 3
+            col = idx % 3
+            layout.addWidget(knob, row, col, alignment=Qt.AlignCenter)
+        
+        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._ui = panel
+        return panel
+
+    def _generate_fragments(self, h: int, w: int, fragment_count: int) -> List[tuple]:
+        """Generate random fragment boundaries within the image."""
+        fragments = []
+        
+        for _ in range(fragment_count):
+            # Generate random fragment size (minimum 20x20 pixels)
+            min_size = 20
+            max_size = min(h, w) // 3
+            fragment_w = np.random.randint(min_size, max_size + 1)
+            fragment_h = np.random.randint(min_size, max_size + 1)
+            
+            # Generate random position
+            x = np.random.randint(0, max(1, w - fragment_w))
+            y = np.random.randint(0, max(1, h - fragment_h))
+            
+            fragments.append((x, y, fragment_w, fragment_h))
+        
+        return fragments
+
+    def _scatter_fragment(self, fragment: tuple, scatter_radius: float, rotation: float, h: int, w: int) -> tuple:
+        """Apply scattering and rotation to a fragment (optimized)."""
+        x, y, fragment_w, fragment_h = fragment
+        
+        # Early return if no scattering needed
+        if scatter_radius <= 0 and rotation <= 0:
+            return (x, y, fragment_w, fragment_h, 0.0)
+        
+        # Calculate scatter distance
+        max_scatter = min(h, w) * (scatter_radius / 100.0)
+        scatter_x = np.random.uniform(-max_scatter, max_scatter)
+        scatter_y = np.random.uniform(-max_scatter, max_scatter)
+        
+        # Apply scatter
+        new_x = int(x + scatter_x)
+        new_y = int(y + scatter_y)
+        
+        # Clamp to image bounds (more efficient)
+        new_x = np.clip(new_x, 0, w - fragment_w)
+        new_y = np.clip(new_y, 0, h - fragment_h)
+        
+        # Apply rotation (in degrees) - only if needed
+        rotation_angle = np.random.uniform(-rotation, rotation) if rotation > 0 else 0.0
+        
+        return (new_x, new_y, fragment_w, fragment_h, rotation_angle)
+
+    def apply(self, src_bgr: np.ndarray) -> np.ndarray:
+        if src_bgr is None:
+            return src_bgr
+            
+        h, w, c = src_bgr.shape
+        result = np.zeros_like(src_bgr)
+        
+        # Convert parameters to usable values
+        fragment_count = max(10, min(200, int(self.fragment_count)))
+        scatter_radius = self.scatter_radius
+        rotation = self.rotation
+        gap_size = int(self.gap_size * min(h, w) / 200)  # Scale gap size to image size
+        intensity = self.intensity / 100.0
+        
+        # Ensure we always generate some fragments if the filter is active
+        if fragment_count <= 0:
+            fragment_count = 20  # Default fragment count
+        
+        # Generate fragments
+        fragments = self._generate_fragments(h, w, fragment_count)
+        
+        # Create a mask to track which pixels have been placed (more efficient than boolean)
+        placed_mask = np.zeros((h, w), dtype=np.uint8)
+        
+        # Process fragments in batches for better performance
+        batch_size = min(20, len(fragments))
+        
+        for i in range(0, len(fragments), batch_size):
+            batch_fragments = fragments[i:i + batch_size]
+            
+            for fragment in batch_fragments:
+                scattered = self._scatter_fragment(fragment, scatter_radius, rotation, h, w)
+                new_x, new_y, fragment_w, fragment_h, rotation_angle = scattered
+                
+                # Extract original fragment
+                orig_x, orig_y, _, _ = fragment
+                original_fragment = src_bgr[orig_y:orig_y+fragment_h, orig_x:orig_x+fragment_w, :].copy()
+                
+                # Apply rotation if specified (only when needed)
+                if abs(rotation_angle) > 0.1:
+                    # Get rotation matrix
+                    center = (fragment_w // 2, fragment_h // 2)
+                    rotation_matrix = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
+                    
+                    # Rotate the fragment
+                    rotated_fragment = cv2.warpAffine(original_fragment, rotation_matrix, 
+                                                    (fragment_w, fragment_h), 
+                                                    borderMode=cv2.BORDER_CONSTANT, 
+                                                    borderValue=(0, 0, 0))
+                else:
+                    rotated_fragment = original_fragment
+                
+                # Apply gap effect by creating a mask
+                if gap_size > 0:
+                    # Create gap mask more efficiently
+                    gap_mask = np.ones((fragment_h, fragment_w), dtype=bool)
+                    gap_mask[:gap_size, :] = False
+                    gap_mask[-gap_size:, :] = False
+                    gap_mask[:, :gap_size] = False
+                    gap_mask[:, -gap_size:] = False
+                    
+                    # Apply gap mask
+                    rotated_fragment = rotated_fragment * gap_mask[:, :, np.newaxis]
+                
+                # Place fragment using vectorized operations
+                self._place_fragment_vectorized(result, placed_mask, rotated_fragment, 
+                                              new_x, new_y, fragment_w, fragment_h, h, w)
+        
+        # Fill remaining empty areas with a dark background (vectorized)
+        empty_mask = placed_mask == 0
+        if np.any(empty_mask):
+            result[empty_mask] = [20, 20, 20]  # Dark background
+        
+        # Blend with original image based on intensity
+        if intensity < 1.0:
+            result = cv2.addWeighted(src_bgr, 1.0 - intensity, result, intensity, 0.0)
+        
+        return result
+
+    def _place_fragment_vectorized(self, result: np.ndarray, placed_mask: np.ndarray, 
+                                 fragment: np.ndarray, new_x: int, new_y: int, 
+                                 fragment_w: int, fragment_h: int, h: int, w: int) -> None:
+        """Efficiently place a fragment using vectorized operations."""
+        # Calculate valid bounds
+        start_x = max(0, new_x)
+        end_x = min(w, new_x + fragment_w)
+        start_y = max(0, new_y)
+        end_y = min(h, new_y + fragment_h)
+        
+        # Calculate fragment slice bounds
+        frag_start_x = start_x - new_x
+        frag_end_x = frag_start_x + (end_x - start_x)
+        frag_start_y = start_y - new_y
+        frag_end_y = frag_start_y + (end_y - start_y)
+        
+        # Extract the valid region
+        if end_x > start_x and end_y > start_y:
+            valid_region = fragment[frag_start_y:frag_end_y, frag_start_x:frag_end_x, :]
+            valid_mask = placed_mask[start_y:end_y, start_x:end_x] == 0
+            
+            # Only place pixels where mask is empty
+            if np.any(valid_mask):
+                # Use advanced indexing for efficient placement
+                result[start_y:end_y, start_x:end_x, :][valid_mask] = valid_region[valid_mask]
+                placed_mask[start_y:end_y, start_x:end_x][valid_mask] = 1
+
+    def reset_params(self) -> None:
+        self.fragment_count = 0
+        self.scatter_radius = 0
+        self.rotation = 0
+        self.gap_size = 0
+        self.intensity = 0
+        self._ui = None
+
+
+class LiquidMorphingFilter(BaseFilter):
+    """
+    Creates a liquid morphing effect that makes the image appear to flow and distort
+    like liquid. Uses flow fields generated from noise to create organic, flowing
+    distortions that completely reshape the image content.
+    """
+    
+    def __init__(self) -> None:
+        super().__init__()
+        self._ui = None
+        self.flow_intensity = 0      # [0, 100] - how strong the liquid effect is
+        self.viscosity = 50          # [0, 100] - how thick/slow the liquid flows
+        self.turbulence = 0          # [0, 100] - chaotic flow patterns
+        self.morph_speed = 0         # [0, 100] - how fast the morphing happens
+        self.wave_frequency = 0      # [0, 100] - frequency of wave patterns
+        self._flow_field_x = None    # Cached flow field for performance
+        self._flow_field_y = None    # Cached flow field for performance
+        self._last_params = None     # Track parameter changes
+
+    @property
+    def name(self) -> str:
+        return "LIQUID_MORPH"
+
+    def build_ui(self, parent: QWidget) -> QWidget:
+        if self._ui is not None:
+            return self._ui
+        
+        panel = QFrame(parent)
+        panel.setObjectName("effectPanel")
+        accent = "#00E676"  # bright green accent
+        panel.setStyleSheet(
+            f"background-color: #252526; border: 1px solid {accent}; border-radius: 8px; padding: 6px;"
+        )
+        layout = QGridLayout(panel)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+        
+        params = [
+            ("Flow", "flow_intensity", 0, 100, 0),
+            ("Viscosity", "viscosity", 0, 100, 50),
+            ("Turbulence", "turbulence", 0, 100, 0),
+            ("Speed", "morph_speed", 0, 100, 0),
+            ("Waves", "wave_frequency", 0, 100, 0),
+        ]
+        
+        rows_needed = (len(params) + 2) // 3
+        panel_height = rows_needed * 60 + 20
+        panel.setFixedHeight(panel_height)
+        
+        for idx, (disp, attr, min_a, max_a, neutral) in enumerate(params):
+            current = getattr(self, attr)
+            knob = KnobControl(
+                self, attr, disp, min_a, max_a, current, panel, default_actual=neutral
+            )
+            knob.dial.setStyleSheet(
+                f"QDial {{ background-color: #333333; border: 2px solid {accent}; border-radius: 20px; }}"
+            )
+            knob.name_label.setStyleSheet(f"color: {accent};")
+            row = idx // 3
+            col = idx % 3
+            layout.addWidget(knob, row, col, alignment=Qt.AlignCenter)
+        
+        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._ui = panel
+        return panel
+
+    def _generate_flow_field(self, h: int, w: int) -> tuple:
+        """Generate flow field using noise and wave patterns for liquid morphing."""
+        # Create coordinate grids
+        y_coords, x_coords = np.mgrid[0:h, 0:w]
+        
+        # Convert to normalized coordinates
+        x_norm = x_coords / w
+        y_norm = y_coords / h
+        
+        # Generate multiple noise layers for complex flow
+        flow_x = np.zeros((h, w), dtype=np.float32)
+        flow_y = np.zeros((h, w), dtype=np.float32)
+        
+        # Base flow parameters
+        flow_strength = self.flow_intensity / 100.0
+        viscosity = max(0.1, self.viscosity / 100.0)
+        turbulence = self.turbulence / 100.0
+        wave_freq = max(0.01, self.wave_frequency / 100.0) * 10.0
+        
+        if flow_strength <= 0:
+            return flow_x, flow_y
+        
+        # Generate multiple noise octaves for realistic flow
+        for octave in range(3):
+            scale = 2 ** octave
+            freq = 0.1 * scale * wave_freq
+            amplitude = flow_strength / (2 ** octave)
+            
+            # Perlin-like noise using sine waves
+            noise_x = (np.sin(x_norm * freq * np.pi * 2) * 
+                      np.cos(y_norm * freq * np.pi * 2) * 
+                      np.sin((x_norm + y_norm) * freq * np.pi))
+            
+            noise_y = (np.cos(x_norm * freq * np.pi * 2) * 
+                      np.sin(y_norm * freq * np.pi * 2) * 
+                      np.cos((x_norm - y_norm) * freq * np.pi))
+            
+            flow_x += noise_x * amplitude
+            flow_y += noise_y * amplitude
+        
+        # Add turbulence for chaotic flow
+        if turbulence > 0:
+            # High-frequency noise for turbulence
+            turb_freq = wave_freq * 5.0
+            turb_x = (np.sin(x_norm * turb_freq * np.pi * 3) * 
+                     np.cos(y_norm * turb_freq * np.pi * 3))
+            turb_y = (np.cos(x_norm * turb_freq * np.pi * 3) * 
+                     np.sin(y_norm * turb_freq * np.pi * 3))
+            
+            flow_x += turb_x * turbulence * flow_strength * 0.3
+            flow_y += turb_y * turbulence * flow_strength * 0.3
+        
+        # Apply viscosity (smooth the flow field)
+        if viscosity < 1.0:
+            kernel_size = int((1.0 - viscosity) * 10) + 1
+            if kernel_size > 1:
+                kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size * kernel_size)
+                flow_x = cv2.filter2D(flow_x, -1, kernel)
+                flow_y = cv2.filter2D(flow_y, -1, kernel)
+        
+        # Scale flow field to pixel displacement
+        max_displacement = min(h, w) * 0.3 * flow_strength
+        flow_x *= max_displacement
+        flow_y *= max_displacement
+        
+        return flow_x, flow_y
+
+    def _apply_liquid_morphing(self, src_bgr: np.ndarray, flow_x: np.ndarray, flow_y: np.ndarray) -> np.ndarray:
+        """Apply liquid morphing using flow field displacement."""
+        h, w, c = src_bgr.shape
+        
+        # Create coordinate grids
+        y_coords, x_coords = np.mgrid[0:h, 0:w]
+        
+        # Calculate new coordinates with flow displacement
+        new_x = x_coords + flow_x
+        new_y = y_coords + flow_y
+        
+        # Clamp coordinates to image bounds
+        new_x = np.clip(new_x, 0, w - 1)
+        new_y = np.clip(new_y, 0, h - 1)
+        
+        # Convert to float32 for remap
+        map_x = new_x.astype(np.float32)
+        map_y = new_y.astype(np.float32)
+        
+        # Apply the morphing using OpenCV's remap for efficiency
+        result = cv2.remap(src_bgr, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        
+        return result
+
+    def apply(self, src_bgr: np.ndarray) -> np.ndarray:
+        if src_bgr is None:
+            return src_bgr
+            
+        h, w, c = src_bgr.shape
+        
+        # Check if we need to regenerate flow field
+        current_params = (self.flow_intensity, self.viscosity, self.turbulence, 
+                         self.wave_frequency, h, w)
+        
+        if (self._flow_field_x is None or self._flow_field_y is None or 
+            self._last_params != current_params):
+            self._flow_field_x, self._flow_field_y = self._generate_flow_field(h, w)
+            self._last_params = current_params
+        
+        # Apply liquid morphing
+        result = self._apply_liquid_morphing(src_bgr, self._flow_field_x, self._flow_field_y)
+        
+        # Add morphing speed effect (temporal variation)
+        if self.morph_speed > 0:
+            # Create a time-based variation
+            time_factor = self.morph_speed / 100.0
+            # Add subtle time-based distortion
+            y_coords, x_coords = np.mgrid[0:h, 0:w]
+            time_wave = np.sin(x_coords * 0.01 + y_coords * 0.01) * time_factor * 5
+            
+            # Apply time-based displacement
+            time_flow_x = np.sin(time_wave) * time_factor * 10
+            time_flow_y = np.cos(time_wave) * time_factor * 10
+            
+            # Combine with existing flow
+            combined_flow_x = self._flow_field_x + time_flow_x
+            combined_flow_y = self._flow_field_y + time_flow_y
+            
+            result = self._apply_liquid_morphing(src_bgr, combined_flow_x, combined_flow_y)
+        
+        return result
+
+    def reset_params(self) -> None:
+        self.flow_intensity = 0
+        self.viscosity = 50
+        self.turbulence = 0
+        self.morph_speed = 0
+        self.wave_frequency = 0
+        self._flow_field_x = None
+        self._flow_field_y = None
+        self._last_params = None
         self._ui = None

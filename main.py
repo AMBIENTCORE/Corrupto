@@ -43,7 +43,8 @@ from effects import (
     BlackAndWhiteFilter, RGBShiftFilter, WaveDistortionFilter,
     BlockifyFilter, PixelSortFilter, NoiseInjectionFilter,
     SliceShiftFilter, CRTScanFilter, PixelSmashFilter,
-    GlitchBlocksFilter, ASCIIArtFilter, MeshFilter
+    GlitchBlocksFilter, ASCIIArtFilter, MeshFilter,
+    FragmentationFilter, LiquidMorphingFilter
 )
 
 # ---------------------------------------------------------------------
@@ -457,6 +458,8 @@ class MainWindow(QMainWindow):
         add_filter(GlitchBlocksFilter())
         add_filter(ASCIIArtFilter())
         add_filter(MeshFilter())
+        add_filter(FragmentationFilter())
+        add_filter(LiquidMorphingFilter())
 
     # -----------------------------------------------------------------
     # File operations
@@ -764,6 +767,22 @@ class MainWindow(QMainWindow):
                     "intensity": (0, 100),
                     "perspective": (0, 100),
                     "wireframe": (0, 100)
+                }
+            elif isinstance(filter_obj, FragmentationFilter):
+                param_ranges = {
+                    "fragment_count": (10, 200),
+                    "scatter_radius": (0, 100),
+                    "rotation": (0, 360),
+                    "gap_size": (0, 50),
+                    "intensity": (0, 100)
+                }
+            elif isinstance(filter_obj, LiquidMorphingFilter):
+                param_ranges = {
+                    "flow_intensity": (0, 100),
+                    "viscosity": (0, 100),
+                    "turbulence": (0, 100),
+                    "morph_speed": (0, 100),
+                    "wave_frequency": (0, 100)
                 }
             
             # Randomize each parameter using its actual range
